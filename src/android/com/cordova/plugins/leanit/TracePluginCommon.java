@@ -218,7 +218,34 @@ public class TracePluginCommon extends CordovaPlugin {
 	 */
 	public void scan() {
 		Intent intent = new Intent(this.cordova.getActivity(), CaptureActivity.class);
+		if(!cameraIsCanUse){
+			android.widget.Toast.makeText(TracePluginCommon.this, "您的相机无法使用,请开启相机服务", Toast.LENGTH_SHORT).show();
+		}
 		this.cordova.startActivityForResult((CordovaPlugin) this, intent, REQUEST_CODE);
+	}
+
+	/**
+	 * 返回true 表示可以使用 返回false表示不可以使用
+	 */
+	public boolean cameraIsCanUse() {
+		boolean isCanUse = true;
+		Camera mCamera = null;
+		try {
+			mCamera = Camera.open();
+			Camera.Parameters mParameters = mCamera.getParameters(); //针对魅族手机
+			mCamera.setParameters(mParameters);
+		} catch (Exception e) {
+			isCanUse = false;
+		}
+		if (mCamera != null) {
+			try {
+				mCamera.release();
+			} catch (Exception e) {
+				e.printStackTrace();
+				return isCanUse;
+			}
+		}
+		return isCanUse;
 	}
 
 	/**
@@ -304,6 +331,15 @@ public class TracePluginCommon extends CordovaPlugin {
 						file=new File(Environment.getExternalStorageDirectory().getAbsolutePath(), "android-trace.apk");
 					} else {
 						file=new File(cordova.getActivity().getFilesDir().getAbsolutePath(), "android-trace.apk");
+					}
+					if(Build.VERSION.SDK_INT>= Build.VERSION_CODES.N) {
+						Uri contentUri = FileProvider.getUriForFile(context,"io.cordova.qrcodeTraceTzMobile",file);
+						intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+						intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+						intent.setDataAndType(contentUri,"application/vnd.android.package-archive");
+					}else{
+						intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+						intent.setDataAndType(Uri.fromFile(file),"application/vnd.android.package-archive");
 					}
 					chmod(cordova.getActivity().getFilesDir().getAbsolutePath());
 					intent.setDataAndType(Uri.fromFile(file),
