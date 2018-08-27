@@ -8,27 +8,20 @@
  */
 package com.cordova.plugins.leanit;
 
-import com.cordova.plugins.leanit.CommonPrintThread;
-
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.ProgressDialog;
+import android.bluetooth.BluetoothDevice;
 import android.content.Context;
 import android.content.DialogInterface;
-
-import org.apache.cordova.CallbackContext;
-import org.apache.cordova.CordovaArgs;
-import org.apache.cordova.CordovaPlugin;
-import org.json.JSONException;
-import org.json.JSONObject;
-
-import android.bluetooth.BluetoothDevice;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.content.pm.PackageInfo;
-import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.Typeface;
 import android.net.Uri;
-import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Message;
@@ -38,14 +31,21 @@ import android.widget.Toast;
 import com.bixolon.printer.BixolonPrinter;
 import com.cordova.plugins.leanit.qrcode.CaptureActivity;
 
+import org.apache.cordova.CallbackContext;
+import org.apache.cordova.CordovaArgs;
+import org.apache.cordova.CordovaPlugin;
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
-import java.util.List;
 import java.util.Set;
-
+import java.util.UUID;
 
 /**
  * Created by admin on 2017/7/11.
@@ -89,18 +89,21 @@ public class TracePluginCommon extends CordovaPlugin {
 		} else if ("print".equals(action)) {    //打印机打印二维码
 			new CommonPrintThread(cordova.getActivity(), args.getString(0)).print();
 			return true;
+		} else if ("templatePrint".equals(action)) {    //模板打印
+			templatePrint(new JSONObject(args.getString(0)));
 		} else if ("scan".equals(action)) {//扫描二维码
 			scan();
 		} else if ("update".equals(action)) {//版本更新
 			JSONObject myJsonObject = new JSONObject(args.getString(0));
 			//获取对应的值
-			update(myJsonObject.getString("versionCode"),myJsonObject.getString("description"),myJsonObject.getString("url"));
-		}else if("setting".equals(action)){
+			update(myJsonObject.getString("versionCode"), myJsonObject.getString("description"), myJsonObject.getString("url"));
+		} else if ("setting".equals(action)) {
 			//获取对应的值
 			setParamAndroid(new JSONObject(args.getString(0)));
 		}
 		return true;
 	}
+
 	/**
 	 * 设置
 	 */
@@ -114,6 +117,101 @@ public class TracePluginCommon extends CordovaPlugin {
 		}
 		editor.commit();//提交修改
 	}
+
+	/**
+	 * 模板打印
+	 */
+	public void templatePrint(JSONObject jsonObject) {
+		try {
+			String templateUrl = jsonObject.getString("templateUrl");
+			Bitmap bitmap = CommonPrintThread.getBitMBitmap(templateUrl);
+			JSONArray attrs = jsonObject.getJSONArray("attrs");
+			Bitmap drawMap = bitmap.copy(Bitmap.Config.ARGB_8888, true);
+			Canvas canvas = new Canvas(drawMap);
+			Paint paint = new Paint();
+			for (int i = 0; i < attrs.length(); i++) {
+				JSONObject object = (JSONObject) attrs.get(i);
+				int x = (int) object.get("x");
+				int y = (int) object.get("y");
+				int width = (int) object.get("width");
+				int height = (int) object.get("height");
+				String align = object.getString("align");
+				int ronate = (int) object.get("ronate");
+				String color = object.getString("color");
+				String type = object.getString("type");
+				String value = object.getString("value");
+				paint.setColor(Color.parseColor(color));
+				paint.setTypeface(Typeface.create("宋体", Typeface.BOLD));
+				paint.setTextAlign(Paint.Align.valueOf(align));
+				paint.setAntiAlias(true);//去除锯齿
+				paint.setFilterBitmap(true);//对位图进行滤波处理
+				//确定旋转中心
+				int midX, midY;
+				if ("CENTER".equals(align)) {
+					midX = x;
+					midY = y;
+				} else {
+					midX = x + width / 2;
+					midY = y + height / 2;
+				}
+				canvas.rotate(ronate, midX, midY);
+				switch (type) {
+					case "pic":
+						Bitmap qrcodeBit = CommonPrintThread.compressBitMap(CommonPrintThread.getBitMBitmap(value), width, height);
+						if (null == qrcodeBit) {
+							Toast.makeText(cordova.getActivity(), "二维码不存在", Toast.LENGTH_LONG).show();
+							return;
+						}
+						canvas.drawBitmap(qrcodeBit, x, y, paint);
+						break;
+					case "word":
+						paint.setTextSize(width);//设置文字大小
+						canvas.drawText(value, x, y, paint);
+						break;
+					default:
+						break;
+				}
+				canvas.rotate(-1 * ronate, midX, midY);
+
+			}
+			FileOutputStream fileOutputStream = null;
+
+			File file = createImageFile(cordova.getActivity());
+			System.out.println(file.getAbsolutePath());
+			System.out.println("width:" + drawMap.getWidth() + ",height:" + drawMap.getHeight());
+			fileOutputStream = new FileOutputStream(file);
+			drawMap.compress(Bitmap.CompressFormat.PNG, 90, fileOutputStream);
+			if (fileOutputStream != null) {
+				fileOutputStream.flush();
+				fileOutputStream.close();
+			}
+			new CommonPrintThread(cordova.getActivity(), "").print(drawMap);
+
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+	}
+
+	/**
+	 * 创建图片
+	 *
+	 * @param activity
+	 * @return
+	 * @throws IOException
+	 */
+	public static File createImageFile(Activity activity) throws IOException {
+
+		String imageFileName = UUID.randomUUID() + "_";
+		File storageDir = activity.getExternalFilesDir(Environment.DIRECTORY_PICTURES);
+
+		File image = File.createTempFile(
+			imageFileName,
+			".jpg",
+			storageDir
+		);
+		return image;
+	}
+
 	/**
 	 * 显示升级信息的对话框
 	 *
@@ -125,13 +223,13 @@ public class TracePluginCommon extends CordovaPlugin {
 		AlertDialog.Builder builder = new AlertDialog.Builder(cordova.getActivity());
 		builder.setIcon(android.R.drawable.ic_dialog_info);
 		builder.setTitle("请升级APP版本至" + versionName);
-		builder.setMessage(desc.replaceAll("#","\n"));
+		builder.setMessage(desc.replaceAll("#", "\n"));
 		builder.setCancelable(false);
 		builder.setPositiveButton("确定", new DialogInterface.OnClickListener() {
 			@Override
 			public void onClick(DialogInterface dialog, int which) {
 				if (Environment.getExternalStorageState().equals(
-						Environment.MEDIA_MOUNTED)) {
+					Environment.MEDIA_MOUNTED)) {
 					downFile(url);//点击确定将apk下载
 				} else {
 					Toast.makeText(cordova.getActivity(), "SD卡不可用，请插入SD卡", Toast.LENGTH_SHORT).show();
@@ -174,18 +272,18 @@ public class TracePluginCommon extends CordovaPlugin {
 					if (con.getResponseCode() == 200) {
 						int length = con.getContentLength();// 获取文件大小
 						InputStream is = con.getInputStream();
-						pBar.setMax(Math.round(length/1024/1024)); // 设置进度条的总长度
+						pBar.setMax(Math.round(length / 1024 / 1024)); // 设置进度条的总长度
 						pBar.setProgressNumberFormat("%1d M/%2d M");
 						FileOutputStream fileOutputStream = null;
 						if (is != null) {
 							//对apk进行保存
 							chmod(cordova.getActivity().getFilesDir().getAbsolutePath());
-							File file ;
+							File file;
 							//如果相等的话表示当前的sdcard挂载在手机上并且是可用的
 							if (!Environment.getExternalStorageState().equals(Environment.MEDIA_MOUNTED)) {
-								file=new File(Environment.getExternalStorageDirectory().getAbsolutePath(), "android-trace.apk");
+								file = new File(Environment.getExternalStorageDirectory().getAbsolutePath(), "android-trace.apk");
 							} else {
-								file=new File(cordova.getActivity().getFilesDir().getAbsolutePath(), "android-trace.apk");
+								file = new File(cordova.getActivity().getFilesDir().getAbsolutePath(), "android-trace.apk");
 							}
 
 							fileOutputStream = new FileOutputStream(file);
@@ -195,7 +293,7 @@ public class TracePluginCommon extends CordovaPlugin {
 							while ((ch = is.read(buf)) != -1) {
 								fileOutputStream.write(buf, 0, ch);
 								process += ch;
-								pBar.setProgress(Math.round(process/1024/1024)); // 实时更新进度了
+								pBar.setProgress(Math.round(process / 1024 / 1024)); // 实时更新进度了
 							}
 						}
 						if (fileOutputStream != null) {
@@ -304,6 +402,7 @@ public class TracePluginCommon extends CordovaPlugin {
 				break;
 		}
 	}
+
 	public static void chmod(String pathc) {
 		String chmodCmd = "chmod -R 777 " + pathc;
 		try {
@@ -312,6 +411,7 @@ public class TracePluginCommon extends CordovaPlugin {
 			e.printStackTrace();
 		}
 	}
+
 	private final Handler mHandler = new Handler(new Handler.Callback() {
 
 		@SuppressWarnings("unchecked")
@@ -325,12 +425,12 @@ public class TracePluginCommon extends CordovaPlugin {
 					//安装apk，也可以进行静默安装
 					Intent intent = new Intent(Intent.ACTION_VIEW);
 					//对apk进行保存
-					File file ;
+					File file;
 					//如果相等的话表示当前的sdcard挂载在手机上并且是可用的
 					if (!Environment.getExternalStorageState().equals(Environment.MEDIA_MOUNTED)) {
-						file=new File(Environment.getExternalStorageDirectory().getAbsolutePath(), "android-trace.apk");
+						file = new File(Environment.getExternalStorageDirectory().getAbsolutePath(), "android-trace.apk");
 					} else {
-						file=new File(cordova.getActivity().getFilesDir().getAbsolutePath(), "android-trace.apk");
+						file = new File(cordova.getActivity().getFilesDir().getAbsolutePath(), "android-trace.apk");
 					}
 					if(Build.VERSION.SDK_INT>= Build.VERSION_CODES.N) {
 						Uri contentUri = FileProvider.getUriForFile(context,"io.cordova.qrcodeTraceTzMobile",file);
@@ -343,7 +443,7 @@ public class TracePluginCommon extends CordovaPlugin {
 					}
 					chmod(cordova.getActivity().getFilesDir().getAbsolutePath());
 					intent.setDataAndType(Uri.fromFile(file),
-							"application/vnd.android.package-archive");
+						"application/vnd.android.package-archive");
 					cordova.getActivity().startActivity(intent);
 					android.os.Process.killProcess(android.os.Process.myPid());
 					return true;
@@ -390,12 +490,12 @@ public class TracePluginCommon extends CordovaPlugin {
 						AlertDialog.Builder builder = new AlertDialog.Builder(cordova.getActivity());
 						builder.create();
 						builder.setTitle("配对蓝牙打印机")
-								.setItems(items, new DialogInterface.OnClickListener() {
-									public void onClick(DialogInterface dialog, int which) {
-										mBixolonPrinter.connect(items[which]);
-										dialog.dismiss();
-									}
-								});
+							.setItems(items, new DialogInterface.OnClickListener() {
+								public void onClick(DialogInterface dialog, int which) {
+									mBixolonPrinter.connect(items[which]);
+									dialog.dismiss();
+								}
+							});
 						builder.show();
 					}
 					return true;
